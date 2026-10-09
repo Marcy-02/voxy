@@ -43,6 +43,8 @@ import static org.lwjgl.opengl.GL42.glDepthFunc;
 import static org.lwjgl.opengl.GL42.*;
 import static org.lwjgl.opengl.GL45.glClearNamedFramebufferfi;
 import static org.lwjgl.opengl.GL45.glGetNamedFramebufferAttachmentParameteri;
+import static org.lwjgl.opengl.GL20C.glUniform3i;
+import static org.lwjgl.opengl.GL20C.glUniform3f;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
 public abstract class AbstractRenderPipeline extends TrackedObject {
@@ -254,6 +256,14 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         var boundary = me.cortex.voxy.client.core.rendering.LodBoundaryFade.getDistances();
         glUniform1f(6, boundary.fadeStart());
         glUniform1f(7, boundary.fadeEnd());
+        int cameraBlockX = (int) Math.floor(viewport.cameraX);
+        int cameraBlockY = (int) Math.floor(viewport.cameraY);
+        int cameraBlockZ = (int) Math.floor(viewport.cameraZ);
+        glUniform3i(8, cameraBlockX, cameraBlockY, cameraBlockZ);
+        glUniform3f(9,
+                (float) (viewport.cameraX - cameraBlockX),
+                (float) (viewport.cameraY - cameraBlockY),
+                (float) (viewport.cameraZ - cameraBlockZ));
         glUniform1i(10, 0);
         glDepthMask(true);
         glColorMask(false,false,false,false);
