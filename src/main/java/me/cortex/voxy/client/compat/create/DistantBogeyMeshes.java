@@ -24,6 +24,16 @@ public final class DistantBogeyMeshes {
 
     private DistantBogeyMeshes() {}
 
+    public static void clearAll() {
+        for (var mesh : CACHE.values()) {
+            if (mesh != null) {
+                mesh.free();
+            }
+        }
+        CACHE.clear();
+        errored = false;
+    }
+
     //Null when the style is unknown client side or capture failed (cached either way)
     public static DistantMesh getOrCapture(ShapeBogey info) {
         String key = info.styleId() + "|" + info.sizeId();

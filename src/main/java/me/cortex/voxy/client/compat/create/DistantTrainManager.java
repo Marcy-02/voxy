@@ -47,9 +47,11 @@ public final class DistantTrainManager {
     }
 
     public static final class ShapeEntry {
-        private final CarriageMeshBaker.BakedCarriage mesh;
+        private volatile CarriageMeshBaker.BakedCarriage mesh;
         private final float initialYaw;
         private final List<ShapeBogey> bogeys;
+        private final List<me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.ShapeBlock> blocks;
+        private final java.util.Map<net.minecraft.core.BlockPos, net.neoforged.neoforge.client.model.data.ModelData> blockEntityData;
         //Refreshed at pose arrival and at draw lookup. The sweep may only close shapes nothing has
         //referenced for a while, because a shapeId embeds the train UUID: a disassembled train's
         //shapes are unreachable forever, and only re-entry of the same live train re-references one
@@ -57,10 +59,14 @@ public final class DistantTrainManager {
         //one is not.
         volatile long lastReferencedMs;
 
-        ShapeEntry(CarriageMeshBaker.BakedCarriage mesh, float initialYaw, List<ShapeBogey> bogeys) {
+        ShapeEntry(CarriageMeshBaker.BakedCarriage mesh, float initialYaw, List<ShapeBogey> bogeys,
+                   List<me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.ShapeBlock> blocks,
+                   java.util.Map<net.minecraft.core.BlockPos, net.neoforged.neoforge.client.model.data.ModelData> blockEntityData) {
             this.mesh = mesh;
             this.initialYaw = initialYaw;
             this.bogeys = bogeys;
+            this.blocks = blocks;
+            this.blockEntityData = blockEntityData;
             this.lastReferencedMs = System.currentTimeMillis();
         }
 
@@ -68,8 +74,25 @@ public final class DistantTrainManager {
         public float initialYaw() { return this.initialYaw; }
         public List<ShapeBogey> bogeys() { return this.bogeys; }
 
+        public void rebake() {
+            if (this.blocks == null || this.blocks.isEmpty()) {
+                return;
+            }
+            var newMesh = CarriageMeshBaker.bake(this.blocks, this.blockEntityData);
+            if (newMesh != null) {
+                var oldMesh = this.mesh;
+                this.mesh = newMesh;
+                if (oldMesh != null) {
+                    oldMesh.close();
+                }
+            }
+        }
+
         void close() {
-            this.mesh.close();
+            var currentMesh = this.mesh;
+            if (currentMesh != null) {
+                currentMesh.close();
+            }
         }
     }
 
@@ -79,6 +102,16 @@ public final class DistantTrainManager {
     //Diagnostics for /voxy debug trains
     public static volatile int shapesReceived;
     public static volatile int bakesFailed;
+
+    public static void rebakeAll() {
+        for (var entry : SHAPES.values()) {
+            try {
+                entry.rebake();
+            } catch (Throwable e) {
+                me.cortex.voxy.common.Logger.error("Failed to rebake distant train carriage", e);
+            }
+        }
+    }
 
     public static void handleShape(CarriageShapePayload payload) {
         shapesReceived++;
@@ -110,7 +143,7 @@ public final class DistantTrainManager {
             }
             var baked = CarriageMeshBaker.bake(payload.blocks(), blockEntityData);
             if (baked != null) {
-                SHAPES.put(payload.shapeId(), new ShapeEntry(baked, payload.initialYaw(), payload.bogeys()));
+                SHAPES.put(payload.shapeId(), new ShapeEntry(baked, payload.initialYaw(), payload.bogeys(), payload.blocks(), blockEntityData));
             } else {
                 bakesFailed++;
             }

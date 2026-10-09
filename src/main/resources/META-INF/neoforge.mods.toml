@@ -6,10 +6,10 @@ issueTrackerURL="https://github.com/NHblock714/voxy/issues"
 [[mods]]
 modId="voxy"
 version="${version}"
-displayName="Voxy超远视野"
-description="NeoForge Voxy fork (far-distance LOD rendering) with bundled mod integrations: Create (distant trains, tracks, contraptions, kinetic culling), sable contraption LOD, and EclipticSeasons seasonal snow"
+displayName="Create: Voxyfied"
+description="Enhanced NeoForge Voxy fork (far-distance LOD rendering) with Create distant train shadows, tracks, bogeys, contraptions, and Sable LOD support."
 authors="Cortex"
-credits="Fork maintained by NHblock"
+credits="Originally ported by NHblock714; adjusted with Create distant shadow fixes and compatibility by Marcy"
 logoFile="assets/voxy/icon.png"
 
 [[dependencies.voxy]]

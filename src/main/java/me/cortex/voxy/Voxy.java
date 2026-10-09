@@ -78,6 +78,11 @@ public class Voxy {
                 NeoForge.EVENT_BUS.register(me.cortex.voxy.client.core.compat.eclipticseasons.VoxyEsHandler.INSTANCE);
             }
 
+            if (ModList.get().isLoaded("create")) {
+                modEventBus.addListener((net.neoforged.neoforge.client.event.ModelEvent.BakingCompleted e) ->
+                        me.cortex.voxy.client.compat.create.CreateAtlasReloadListener.onReload());
+            }
+
             //Distant train rendering is Create-free on the client (poses + baked meshes arrive over
             //our own payloads), so it registers unconditionally. Bogeys go through Create's own
             //style renderers and need the mod present. Rendering hooks the tail of the LOD pipeline

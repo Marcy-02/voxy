@@ -55,7 +55,8 @@ public final class CarriageMeshBaker {
 
         @Override
         public net.minecraft.world.level.lighting.LevelLightEngine getLightEngine() {
-            return Minecraft.getInstance().level.getLightEngine();
+            var level = Minecraft.getInstance().level;
+            return level != null ? level.getLightEngine() : null;
         }
 
         @Override

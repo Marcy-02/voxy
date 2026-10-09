@@ -952,6 +952,16 @@ public final class DistantContraptionManager {
         snapshotCount = SNAPSHOTS.size();
     }
 
+    public static void onAtlasReload() {
+        for (var snap : SNAPSHOTS.values()) {
+            if (snap.mesh != null) {
+                snap.mesh.close();
+                snap.mesh = null;
+            }
+            snap.bakeGaveNothing = false;
+        }
+    }
+
     public static void clearAll() {
         for (var snap : SNAPSHOTS.values()) {
             if (snap.mesh != null) {

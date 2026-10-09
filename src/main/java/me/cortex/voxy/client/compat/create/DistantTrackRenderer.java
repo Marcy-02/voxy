@@ -51,6 +51,12 @@ import static org.lwjgl.opengl.GL20C.glUseProgram;
 //complement of vanilla's: straights hide per compiled section, turns hide within the (clamped) BE
 //view distance, exactly where MixinTrackRenderer stops the real bezier BEs.
 public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
+    public static DistantTrackRenderer INSTANCE;
+
+    public DistantTrackRenderer() {
+        INSTANCE = this;
+    }
+
     private static final long RECHECK_INTERVAL_MS = 5000;
     //Sodium compiles sections lazily (frustum + build queue): a section freshly entering the view
     //reads "not compiled" for a few hundred ms even though vanilla is about to draw it, and it
@@ -213,6 +219,10 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
             return;
         }
         this.maybeRebake(mc);
+    }
+
+    public void onAtlasReload() {
+        this.clearAll();
     }
 
     private void clearAll() {

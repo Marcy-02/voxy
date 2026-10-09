@@ -1,8 +1,9 @@
-# voxy — NeoForge 1.21.1 fork
+# Create: Voxyfied — NeoForge 1.21.1
 
-Unofficial NeoForge 1.21.1 fork of [Voxy](https://github.com/MCRcortex/voxy) by MCRcortex,
-continuing the [neo-voxy](https://github.com/JohnSnow14284/neo-voxy) port lineage.
-Maintained by NHblock714.QQ:1098491849
+Unofficial NeoForge 1.21.1 fork of [Voxy](https://github.com/MCRcortex/voxy) by MCRcortex, continuing the [neo-voxy](https://github.com/JohnSnow14284/neo-voxy) port lineage.
+
+> **Attribution & Credits:**  
+> The core NeoForge port and base integrations are mostly developed by **NHblock714** (QQ: 1098491849). Marcy maintained and modified this repository to fix Create distant train shadow rendering, resolve texture atlas desyncs on resource/shader reload, add Sable contraption LOD/culling compatibility, and optimize builds.
 
 ## Changes over neo-voxy
 

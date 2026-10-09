@@ -40,6 +40,9 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
         this.voxy$shutdownRenderer();
         if (this.level != null) {
             this.voxy$createRenderer();
+            if (net.neoforged.fml.ModList.get() != null && net.neoforged.fml.ModList.get().isLoaded("create")) {
+                me.cortex.voxy.client.compat.create.CreateAtlasReloadListener.onReload();
+            }
         }
     }
 
