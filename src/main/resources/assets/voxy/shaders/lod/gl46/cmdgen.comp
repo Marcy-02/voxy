@@ -1,0 +1,246 @@
+#version 450
+#extension GL_ARB_gpu_shader_int64 : enable
+
+layout(local_size_x = 128) in;
+
+#define DRAW_BUFFER_BINDING 1
+#define DRAW_COUNT_BUFFER_BINDING 2
+#define SECTION_METADATA_BUFFER_BINDING 3
+#define VISIBILITY_BUFFER_BINDING 4
+#define INDIRECT_SECTION_LOOKUP_BINDING 5
+#define POSITION_SCRATCH_BINDING 6
+#define POSITION_SCRATCH_ACCESS writeonly
+
+#import <voxy:lod/section.glsl>
+#import <voxy:lod/gl46/bindings.glsl>
+
+//https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GL_EXT_shader_16bit_storage.txt
+// adds support for uint8_t which can use for compact visibility buffer
+
+
+#ifdef HAS_STATISTICS
+layout(binding = STATISTICS_BUFFER_BINDING, std430) restrict buffer statisticsBuffer {
+    uint visibleSectionCounts[5];
+    uint quadCounts[5];
+};
+#endif
+
+/*
+    uint  count;
+    uint  instanceCount;
+    uint  firstIndex;
+    int  baseVertex;
+    uint  baseInstance;
+    */
+
+layout(binding = TRANSLUCENT_DISTANCE_BUFFER_BINDING, std430) restrict buffer TranslucentCommandCount {
+    uint[] translucentCommandData;
+};
+
+//Note: if i want reverse indexing i need to use the index buffer offset to offset
+void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
+    DrawCommand cmd;
+    cmd.count = quadCount * 6;
+    cmd.instanceCount = 1;
+    cmd.firstIndex = 0;
+    cmd.baseVertex = int(offset)<<2;
+    cmd.baseInstance = instance;
+    cmdBuffer[idx] = cmd;
+}
+
+void main() {
+    if (gl_GlobalInvocationID.x >= sectionCount) {
+        return;
+    }
+    #ifdef OPAQUE_NEAR_FIRST
+    //The traversal appends the render list one LOD level per dispatch through a single atomic
+    //counter, so the list is far-to-near BY LEVEL BLOCK (coarse nodes are the far ones; a leaf
+    //without children yet, or a region drawn at child level while its own mesh is pending, blurs
+    //that). Within a block the order is atomic-arrival and the reversal leaves it arbitrary.
+    //Walking the list backwards emits the near blocks' commands first so depth rejection drops
+    //the far fill hidden behind them. Order is a heuristic only; the depth test owns correctness,
+    //and command slots still come from the same atomic so every lane stays dense.
+    uint listIdx = (sectionCount - 1u) - gl_GlobalInvocationID.x;
+    #else
+    uint listIdx = gl_GlobalInvocationID.x;
+    #endif
+    uint sectionId = indirectLookup[listIdx];
+    SectionMeta meta = sectionData[sectionId];
+    uint detail = extractDetail(meta);
+    ivec3 ipos = extractPosition(meta);
+
+    vec3 cornerPos = vec3(((ipos<<detail)-baseSectionPos)<<5)-cameraSubPos;
+
+
+    uint dat = visibilityData[sectionId];
+    uint stamp = dat&0x7fffffffu;
+
+    //Visible this frame, OR visible at the previous build (one-build grace, stamp 0 = never
+    //tested, no grace). The occlusion raster is marginal exactly where vanilla terrain half-covers
+    //LOD proxy boxes - the render-distance seam - and a section whose test flips between builds
+    //would otherwise vanish for a whole hold period at a time under the command-list hold:
+    //per-frame flips were invisible when every frame rebuilt (the temporal lane papered over
+    //them the same frame), held replays turn them into multi-frame blinking. The one stale build
+    //of presence is overdraw the depth test eats, never a correctness change. The host uploads
+    //visibilityGraceId = 0 while the hold is off, which turns the clause off with it.
+    bool shouldRender = stamp == frameId || (stamp == visibilityGraceId && stamp != 0u);
+    bool renderTemporally = (dat&0x80000000u)==0;// means, if it was not visible last frame
+
+
+
+    if (shouldRender) {
+
+        #ifdef HAS_STATISTICS
+        atomicAdd(visibleSectionCounts[detail], 1);
+        #endif
+
+        uint ptr = extractQuadStart(meta);
+        ivec3 relative = ipos-(baseSectionPos>>detail);
+        //drawId MUST be this section's LIST index, never the invocation id: buildtranslucents
+        //resolves the section back through indirectLookup[drawId] and the vertex stage fetches
+        //positionBuffer[baseInstance] - both break the moment drawId and the entry diverge (with
+        //OPAQUE_NEAR_FIRST they differ for every invocation). The near-first effect lives purely
+        //in which invocation grabs the earlier command slots from the atomic below.
+        uint drawId = listIdx;
+
+        positionBuffer[drawId] = extractRawPos(meta);
+        uvec4 counts = meta.b;
+
+        //TODO implicit command merging
+        uint msk = 0;
+        msk |= uint(((counts.y      &0xFFFFu)!=0) && (relative.y>-1))<<0;
+        msk |= uint((((counts.y>>16)&0xFFFFu)!=0) && (relative.y<1 ))<<1;
+        msk |= uint(((counts.z      &0xFFFFu)!=0) && (relative.z>-1))<<2;
+        msk |= uint((((counts.z>>16)&0xFFFFu)!=0) && (relative.z<1 ))<<3;
+        msk |= uint(((counts.w      &0xFFFFu)!=0) && (relative.x>-1))<<4;
+        msk |= uint((((counts.w>>16)&0xFFFFu)!=0) && (relative.x<1 ))<<5;
+
+        msk |= uint(((counts.x>>16)&0xFFFFu)!=0)<<6;
+
+
+        uint cmdCnt = bitCount(msk);
+        uint cmdPtr = atomicAdd(opaqueDrawCount, cmdCnt);
+
+        uint tCmdPtr = 0;
+        if (renderTemporally) {
+            tCmdPtr = atomicAdd(temporalOpaqueDrawCount, cmdCnt) + TEMPORAL_OFFSET;
+        }
+
+        //TODO: make totalQuads also have temporal amount
+        #ifdef HAS_STATISTICS
+        uint totalQuads = 0;
+        #endif
+
+        uint count = 0;
+        //Translucency
+        count = counts.x&0xFFFFu;
+        if (count != 0) {
+            uint tp = atomicAdd(translucentDrawCount, 1)+TRANSLUCENT_WRITE_BASE;
+            translucentCommandData[tp] = drawId;
+            uvec3 absRel = abs(relative);
+            uint distToCamera = (absRel.x+absRel.y+absRel.z)<<detail;
+            //The -1 is because we want 0 to TRANSLUCENT_WRITE_BASE, exclusive of ending, not inclusive (0->1023)
+            distToCamera = (TRANSLUCENT_WRITE_BASE-1)-min(distToCamera, (TRANSLUCENT_WRITE_BASE-1));
+            atomicAdd(translucentCommandData[distToCamera], 1);
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //Double sided quads
+        count = (counts.x>>16)&0xFFFFu;
+        if (count != 0) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //Down
+        count = (counts.y)&0xFFFFu;
+        if (((msk&(1u<<0))!=0)) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //Up
+        count = (counts.y>>16)&0xFFFFu;
+        if ((msk&(1u<<1))!=0) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //North
+        count = (counts.z)&0xFFFFu;
+        if ((msk&(1u<<2))!=0) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //South
+        count = (counts.z>>16)&0xFFFFu;
+        if ((msk&(1u<<3))!=0) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //West
+        count = (counts.w)&0xFFFFu;
+        if ((msk&(1u<<4))!=0) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        //East
+        count = (counts.w>>16)&0xFFFFu;
+        if ((msk&(1u<<5))!=0) {
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
+        }
+        ptr += count;
+
+        #ifdef HAS_STATISTICS
+        atomicAdd(quadCounts[detail], totalQuads);
+        #endif
+    }
+}

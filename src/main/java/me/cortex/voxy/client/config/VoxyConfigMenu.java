@@ -1,0 +1,441 @@
+package me.cortex.voxy.client.config;
+
+import me.cortex.voxy.client.ClientSessionEvents;
+import me.cortex.voxy.client.config.SodiumConfigBuilder.*;
+import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.SSAO;
+import me.cortex.voxy.client.core.util.IrisUtil;
+import me.cortex.voxy.common.util.cpu.CpuLayout;
+import me.cortex.voxy.commonImpl.VoxyCommon;
+import me.cortex.voxy.compat.far.FarEntityClient;
+import net.caffeinemc.mods.sodium.api.config.ConfigEntryPoint;
+import net.caffeinemc.mods.sodium.api.config.ConfigEntryPointForge;
+import net.caffeinemc.mods.sodium.api.config.ConfigState;
+import net.caffeinemc.mods.sodium.api.config.option.OptionFlag;
+import net.caffeinemc.mods.sodium.api.config.option.OptionImpact;
+import net.caffeinemc.mods.sodium.api.config.option.Range;
+import net.caffeinemc.mods.sodium.api.config.structure.ConfigBuilder;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+
+@ConfigEntryPointForge("voxy")
+public class VoxyConfigMenu implements ConfigEntryPoint {
+    @Override
+    public void registerConfigLate(ConfigBuilder B) {
+        if (!VoxyCommon.isAvailable()) return;//Dont even register the config if its not avalible
+
+        var CFG = VoxyConfig.CONFIG;
+
+        var cc = B.registerModOptions("voxy", VoxyCommon.displayName(), VoxyCommon.MOD_VERSION)
+                .setIcon(ResourceLocation.parse("voxy:icon.png"));
+
+        final var RENDER_RELOAD = OptionFlag.REQUIRES_RENDERER_RELOAD.getId().toString();
+
+        SodiumConfigBuilder.buildToSodium(B, cc, CFG::save, postOp->{
+                    postOp.register("voxy:update_threads", ()->{
+                        var instance = VoxyCommon.getInstance();
+                        if (instance != null) {
+                            instance.updateDedicatedThreads();
+                        }
+                    }, "voxy:enabled")
+                            .register("voxy:iris_reload", IrisUtil::reload)
+                            .register("voxy:refresh_far_entities", FarEntityClient::sendHello)
+                            .register("voxy:refresh_chunk_request", ()->{
+                                var minecraft = Minecraft.getInstance();
+                                if (minecraft.getConnection() != null) {
+                                    minecraft.options.broadcastOptions();
+                                }
+                            });
+                },
+                new Page(Component.translatable("voxy.config.general"),
+                        new Group(
+                                new BoolOption(
+                                        "voxy:enabled",
+                                        Component.translatable("voxy.config.general.enabled"),
+                                        ()->CFG.enabled, v->{
+                                            CFG.enabled=v;
+                                            //we need to special case enabled, since the render reload flag runs befor us and its quite important we get it right
+                                            if (v && ClientSessionEvents.inSession) {//We should only load when we are in session
+                                                VoxyCommon.createInstance();
+                                            }
+                                        })
+                                        .setPostChangeRunner(c->{
+                                            if (!c) {
+                                                var vrsh = (IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer;
+                                                if (vrsh != null) {
+                                                    vrsh.voxy$shutdownRenderer();
+                                                }
+                                                VoxyCommon.shutdownInstance();
+                                            }
+                                        }).setPostChangeFlags(RENDER_RELOAD, "voxy:iris_reload").setEnabler(null)
+                        ), new Group(
+                                new IntOption(
+                                        "voxy:thread_count",
+                                        Component.translatable("voxy.config.general.serviceThreads"),
+                                        ()->CFG.serviceThreads, v->CFG.serviceThreads=v,
+                                        new Range(1, CpuLayout.getCoreCount(), 1))
+                                        .setPostChangeFlags("voxy:update_threads"),
+                                new BoolOption(
+                                        "voxy:use_sodium_threads",
+                                        Component.translatable("voxy.config.general.useSodiumBuilder"),
+                                        ()->!CFG.dontUseSodiumBuilderThreads, v->CFG.dontUseSodiumBuilderThreads=!v)
+                                        .setPostChangeFlags("voxy:update_threads", RENDER_RELOAD)
+                        ), new Group(
+                                new BoolOption(
+                                        "voxy:ingest_enabled",
+                                        Component.translatable("voxy.config.general.ingest"),
+                                        ()->CFG.ingestEnabled, v->CFG.ingestEnabled=v),
+                                new BoolOption(
+                                        "voxy:show_join_message",
+                                        Component.translatable("voxy.config.general.showJoinMessage"),
+                                        ()->CFG.showJoinMessage, v->CFG.showJoinMessage=v)
+                        )
+                ).setEnabler("voxy:enabled"),
+                new Page(Component.translatable("voxy.config.rendering"),
+                        new Group(
+                                new BoolOption(
+                                        "voxy:rendering",
+                                        Component.translatable("voxy.config.general.rendering"),
+                                        ()->CFG.enableRendering, v->CFG.enableRendering=v)
+                                        .setPostChangeRunner(c->{
+                                            var vrsh = (IGetVoxyRenderSystem)Minecraft.getInstance().levelRenderer;
+                                            if (vrsh != null) {
+                                                if (c) {
+                                                    vrsh.voxy$createRenderer();
+                                                } else {
+                                                    vrsh.voxy$shutdownRenderer();
+                                                }
+                                            }
+                                        },"voxy:enabled", RENDER_RELOAD)
+                                        .setPostChangeFlags("voxy:iris_reload")
+                                        .setEnabler("voxy:enabled")
+                        ), new Group(
+                                new IntOption(
+                                        "voxy:subdivsize",
+                                        Component.translatable("voxy.config.general.subDivisionSize"),
+                                        ()->subDiv2ln(CFG.subDivisionSize), v->CFG.subDivisionSize=ln2subDiv(v),
+                                        new Range(0, SUBDIV_IN_MAX, 1))
+                                        .setFormatter(v->Component.literal(Integer.toString(Math.round(ln2subDiv(v)))))
+                                        .setImpact(OptionImpact.HIGH),
+                                new IntOption(
+                                        "voxy:render_distance",
+                                        Component.translatable("voxy.config.general.renderDistance"),
+                                        ()->Math.round(CFG.sectionRenderDistance*16), v->CFG.sectionRenderDistance=((float)v)/16,
+                                        //Lower bound matches sanitize's 2-section floor: anything
+                                        //below it would save as 32 regardless of what the slider showed
+                                        new Range(32, 64*16, 1))
+                                        //The value is stored as a float with respect to the size of top level lods, it its increment is a fraction with respect to the size of the bottom level lod
+                                        // the value is displayed as a chunk render distance
+                                        .setFormatter(v->Component.literal(Integer.toString(v*2)))
+                                        .setPostChangeRunner(c->{
+                                            var vrsh = (IGetVoxyRenderSystem)Minecraft.getInstance().levelRenderer;
+                                            if (vrsh != null) {
+                                                var vrs = vrsh.voxy$getRenderSystem();
+                                                if (vrs != null) {
+                                                    //CFG.sectionRenderDistance == c/16
+                                                    vrs.setRenderDistance(CFG.sectionRenderDistance);
+                                                }
+                                            }
+                                        }, "voxy:rendering", RENDER_RELOAD)
+                                        .setImpact(OptionImpact.MEDIUM),
+                                new IntOption(
+                                        "voxy:render_pressure",
+                                        Component.translatable("voxy.config.general.renderPressure"),
+                                        ()->CFG.getRenderPressureLevel(), v->CFG.renderPressure=v,
+                                        new Range(0, 4, 1))
+                                        .setFormatter(v->Component.translatable("voxy.config.general.renderPressure." + v))
+                                        .setImpact(OptionImpact.HIGH),
+                                new EnumOption<>(
+                                        "voxy:leaf_lod_mode",
+                                        VoxyConfig.LeafLodMode.class,
+                                        Component.translatable("voxy.config.general.leafLodMode"),
+                                        CFG::getLeafLodMode,
+                                        CFG::setLeafLodMode)
+                                        .setNameProvider(mode -> Component.translatable(
+                                                "voxy.config.general.leafLodMode." + mode.name().toLowerCase(java.util.Locale.ROOT)))
+                                        .setPostChangeFlags(RENDER_RELOAD)
+                                        .setImpact(OptionImpact.MEDIUM)
+                        ), new Group(
+                                new BoolOption(
+                                    "voxy:environmental_fog",
+                                    Component.translatable("voxy.config.general.environmental_fog"),
+                                    () -> CFG.useEnvironmentalFog,
+                                    v -> CFG.useEnvironmentalFog = v),
+                                new EnumOption<>("voxy:ssao_mode",
+                                        SSAO.SSAOMode.class,
+                                        Component.translatable("voxy.config.general.ssao_mode"),
+                                        ()->CFG.getSSAOMode(), v->CFG.setSSAOMode(v))
+                                        .setNameProvider(mode -> Component.translatable(
+                                                "voxy.config.general.ssao_mode." + mode.name().toLowerCase(java.util.Locale.ROOT)))
+                                        .setImpact(OptionImpact.MEDIUM)
+                                        .setPostChangeFlags(RENDER_RELOAD)
+                        )
+                        .setEnablerInherit(s->!IrisUtil.irisShaderPackEnabled(), ConfigState.UPDATE_ON_REBUILD), new Group(
+                                new BoolOption(
+                                        "voxy:adapt_cloud_distance",
+                                        Component.translatable("voxy.config.general.adaptCloudDistance"),
+                                        ()->CFG.adaptCloudDistance, v->CFG.adaptCloudDistance=v),
+                                new IntOption(
+                                        "voxy:cloud_distance",
+                                        Component.translatable("voxy.config.general.cloudDistance"),
+                                        ()->CFG.cloudDistance, v->CFG.cloudDistance=v,
+                                        new Range(0, VoxyConfig.MAX_CLOUD_DISTANCE, 1))
+                                        .setImpact(OptionImpact.LOW)
+                        )
+                        .setEnablerInherit(s->!IrisUtil.irisShaderPackEnabled(), ConfigState.UPDATE_ON_REBUILD), new Group(
+                                new IntOption(
+                                        "voxy:fog_intensity",
+                                        Component.translatable("voxy.config.general.fogIntensity"),
+                                        ()->Math.round(CFG.fogIntensity * 100), v->CFG.fogIntensity=v / 100.0f,
+                                        new Range(0, 100, 1))
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:fog_density",
+                                        Component.translatable("voxy.config.general.fogDensity"),
+                                        ()->Math.round(CFG.fogDensity * 100), v->CFG.fogDensity=v / 100.0f,
+                                        new Range(0, 100, 1))
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:sky_fog_distance",
+                                        Component.translatable("voxy.config.general.skyFogDistance"),
+                                        ()->CFG.skyFogDistance, v->CFG.skyFogDistance=v,
+                                        new Range(0, 1024, 1))
+                                        .setImpact(OptionImpact.LOW)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new IntOption(
+                                        "voxy:fog_distance",
+                                        Component.translatable("voxy.config.general.fog_distance"),
+                                        ()->CFG.fogDistancePercent, v->CFG.fogDistancePercent=v,
+                                        new Range(5, 200, 5))
+                                        .setFormatter(v->Component.literal(v+"%"))
+                                        .setImpact(OptionImpact.LOW)
+                        )
+                        .setEnablerInherit(s->!IrisUtil.irisShaderPackEnabled(), ConfigState.UPDATE_ON_REBUILD),
+                        //Not under the shaderpack gate above: that gate is for the ambient fog options,
+                        //which only exist on the non-shader blit. The circular handover is decided in the
+                        //shared depth/stencil setup and applies to both pipelines.
+                        new Group(
+                                //LOD shading is the shader pack's job, so this is greyed out without one -
+                                //and it only does anything for packs that ship voxy_*_lite.glsl. The iris
+                                //reload is what re-runs the patch that picks between the two programs.
+                                new BoolOption(
+                                        "voxy:lod_lite_shading",
+                                        Component.translatable("voxy.config.general.lodLiteShading"),
+                                        ()->CFG.lodLiteShading, v->CFG.lodLiteShading=v)
+                                        .setImpact(OptionImpact.HIGH)
+                                        .setEnablerInherit(s->IrisUtil.irisShaderPackEnabled(), ConfigState.UPDATE_ON_REBUILD)
+                                        .setPostChangeFlags(RENDER_RELOAD, "voxy:iris_reload"),
+                                new BoolOption(
+                                        "voxy:lod_boundary_fade",
+                                        Component.translatable("voxy.config.general.lodBoundaryFade"),
+                                        ()->CFG.enableLodBoundaryFade, v->CFG.enableLodBoundaryFade=v)
+                                        .setImpact(OptionImpact.MEDIUM)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new IntOption(
+                                        "voxy:lod_boundary_fade_length",
+                                        Component.translatable("voxy.config.general.lodBoundaryFadeLength"),
+                                        ()->CFG.lodBoundaryFadeLength, v->CFG.lodBoundaryFadeLength=v,
+                                        new Range(8, 64, 4))
+                                        .setEnabler("voxy:lod_boundary_fade")
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:lod_boundary_inset",
+                                        Component.translatable("voxy.config.general.lodBoundaryInset"),
+                                        ()->CFG.lodBoundaryInset, v->CFG.lodBoundaryInset=v,
+                                        new Range(8, 32, 2))
+                                        .setEnabler("voxy:lod_boundary_fade")
+                                        .setImpact(OptionImpact.LOW)
+                        )
+                ).setEnablerAND("voxy:enabled", "voxy:rendering"),
+                //Every switch here is off by default and fails toward the default path - the explicit
+                //defaults are what sodium's reset restores, whatever the json held at game start.
+                //The first group is read every frame; the second bakes into shader defines or
+                //viewport resources at renderer creation, so those carry the renderer-reload flag.
+                new Page(Component.translatable("voxy.config.experimental"),
+                        new Group(
+                                new BoolOption(
+                                        "voxy:experimental_cmd_list_hold",
+                                        Component.translatable("voxy.config.experimental.cmdListHold"),
+                                        ()->CFG.experimentalCmdListHold, v->CFG.experimentalCmdListHold=v)
+                                        .setDefault(false)
+                                        .setImpact(OptionImpact.MEDIUM),
+                                new IntOption(
+                                        "voxy:cmd_list_hold_max_frames",
+                                        Component.translatable("voxy.config.experimental.cmdListHoldMaxFrames"),
+                                        ()->CFG.cmdListHoldMaxFrames, v->CFG.cmdListHoldMaxFrames=v,
+                                        new Range(2, 60, 1))
+                                        .setDefault(4)
+                                        .setEnablerInherit("voxy:experimental_cmd_list_hold")
+                                        .setImpact(OptionImpact.LOW),
+                                new BoolOption(
+                                        "voxy:experimental_chunk_mask_reuse",
+                                        Component.translatable("voxy.config.experimental.chunkMaskReuse"),
+                                        ()->CFG.experimentalChunkMaskReuse, v->CFG.experimentalChunkMaskReuse=v)
+                                        .setDefault(false)
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:section_array_pool_mib",
+                                        Component.translatable("voxy.config.experimental.sectionArrayPoolMiB"),
+                                        ()->CFG.sectionArrayPoolMiB, v->CFG.sectionArrayPoolMiB=v,
+                                        new Range(25, 1024, 1))
+                                        .setDefault(100)
+                                        .setFormatter(v->Component.literal(v + " MiB"))
+                                        //Heap, not frame time: a filled pool holds the whole budget
+                                        .setImpact(OptionImpact.MEDIUM)
+                        ), new Group(
+                                new BoolOption(
+                                        "voxy:experimental_opaque_near_first",
+                                        Component.translatable("voxy.config.experimental.opaqueNearFirst"),
+                                        ()->CFG.experimentalOpaqueNearFirst, v->CFG.experimentalOpaqueNearFirst=v)
+                                        .setDefault(false)
+                                        .setImpact(OptionImpact.MEDIUM)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new BoolOption(
+                                        "voxy:experimental_chunk_mask_half_res",
+                                        Component.translatable("voxy.config.experimental.chunkMaskHalfRes"),
+                                        ()->CFG.experimentalChunkMaskHalfRes, v->CFG.experimentalChunkMaskHalfRes=v)
+                                        .setDefault(false)
+                                        .setImpact(OptionImpact.MEDIUM)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new BoolOption(
+                                        "voxy:experimental_hiz_compute",
+                                        Component.translatable("voxy.config.experimental.hiZCompute"),
+                                        ()->CFG.experimentalHiZCompute, v->CFG.experimentalHiZCompute=v)
+                                        .setDefault(false)
+                                        .setImpact(OptionImpact.LOW)
+                                        .setPostChangeFlags(RENDER_RELOAD)
+                        )
+                ).setEnablerAND("voxy:enabled", "voxy:rendering"),
+                new Page(Component.translatable("voxy.config.compat"),
+                        new Group(
+                                new BoolOption(
+                                        "voxy:sable_lod",
+                                        Component.translatable("voxy.config.compat.sableLod"),
+                                        ()->CFG.sableLodRendering, v->CFG.sableLodRendering=v),
+                                new IntOption(
+                                        "voxy:sable_lod_distance",
+                                        Component.translatable("voxy.config.compat.sableLodDistance"),
+                                        ()->CFG.simulatedContraptionRenderDistancePercent,
+                                        v->CFG.simulatedContraptionRenderDistancePercent=v,
+                                        new Range(0, 100, 5))
+                                        .setFormatter(v->Component.literal(v+"%"))
+                                        .setImpact(OptionImpact.MEDIUM)
+                        ), new Group(
+                                new BoolOption(
+                                        "voxy:distant_trains",
+                                        Component.translatable("voxy.config.compat.distantTrains"),
+                                        ()->CFG.distantTrains, v->CFG.distantTrains=v)
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:distant_train_distance",
+                                        Component.translatable("voxy.config.compat.distantTrainDistance"),
+                                        ()->CFG.distantTrainMaxChunks, v->CFG.distantTrainMaxChunks=v,
+                                        new Range(0, 192, 8))
+                                        .setFormatter(VoxyConfigMenu::formatCreateDistance)
+                                        .setImpact(OptionImpact.LOW),
+                                new BoolOption(
+                                        "voxy:distant_tracks",
+                                        Component.translatable("voxy.config.compat.distantTracks"),
+                                        ()->CFG.distantTracks, v->CFG.distantTracks=v)
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:distant_track_distance",
+                                        Component.translatable("voxy.config.compat.distantTrackDistance"),
+                                        ()->CFG.distantTrackMaxChunks, v->CFG.distantTrackMaxChunks=v,
+                                        new Range(0, 192, 8))
+                                        .setFormatter(VoxyConfigMenu::formatCreateDistance)
+                                        .setImpact(OptionImpact.LOW),
+                                new BoolOption(
+                                        "voxy:distant_contraptions",
+                                        Component.translatable("voxy.config.compat.distantContraptions"),
+                                        ()->CFG.distantContraptions, v->CFG.distantContraptions=v)
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:distant_contraption_distance",
+                                        Component.translatable("voxy.config.compat.distantContraptionDistance"),
+                                        ()->CFG.distantContraptionMaxChunks, v->CFG.distantContraptionMaxChunks=v,
+                                        new Range(0, 192, 8))
+                                        .setFormatter(VoxyConfigMenu::formatCreateDistance)
+                                        .setImpact(OptionImpact.LOW),
+                                new BoolOption(
+                                        "voxy:distant_kinetics",
+                                        Component.translatable("voxy.config.compat.distantKinetics"),
+                                        ()->CFG.distantKinetics, v->CFG.distantKinetics=v)
+                                        .setImpact(OptionImpact.LOW),
+                                //Beacons are not a create integration, but they share this page's hook
+                                //and distance formatter, and a player looking for "how far do distant
+                                //things draw" looks here
+                                new BoolOption(
+                                        "voxy:distant_beacons",
+                                        Component.translatable("voxy.config.compat.distantBeacons"),
+                                        ()->CFG.distantBeacons, v->CFG.distantBeacons=v)
+                                        .setImpact(OptionImpact.LOW),
+                                new IntOption(
+                                        "voxy:distant_beacon_distance",
+                                        Component.translatable("voxy.config.compat.distantBeaconDistance"),
+                                        ()->CFG.distantBeaconMaxChunks, v->CFG.distantBeaconMaxChunks=v,
+                                        new Range(0, 512, 16))
+                                        .setFormatter(VoxyConfigMenu::formatCreateDistance)
+                                        .setImpact(OptionImpact.LOW),
+                                //Some server mods ship a far-player renderer of their own. Two of them
+                                //running at once puts a second body next to a player who is standing
+                                //right there, so this needs to be reachable without editing a file.
+                                new BoolOption(
+                                        "voxy:far_players",
+                                        Component.translatable("voxy.config.compat.farPlayers"),
+                                        ()->CFG.enableFarPlayerRendering, v->CFG.enableFarPlayerRendering=v)
+                                        .setImpact(OptionImpact.LOW),
+                                new BoolOption(
+                                        "voxy:far_player_names",
+                                        Component.translatable("voxy.config.compat.farPlayerNames"),
+                                        ()->CFG.renderFarPlayerNames, v->CFG.renderFarPlayerNames=v)
+                                        .setImpact(OptionImpact.LOW),
+                                new BoolOption(
+                                        "voxy:share_far_player_position",
+                                        Component.translatable("voxy.config.compat.shareFarPlayerPosition"),
+                                        ()->CFG.shareFarPlayerPosition, v->CFG.shareFarPlayerPosition=v)
+                                        .setImpact(OptionImpact.LOW)
+                        ), new Group(
+                                new BoolOption(
+                                        "voxy:es_snow_lod",
+                                        Component.translatable("voxy.config.compat.esSnowLod"),
+                                        ()->CFG.eclipticSeasonsSnowLod, v->CFG.eclipticSeasonsSnowLod=v),
+                                new BoolOption(
+                                        "voxy:es_lod_auto_reload",
+                                        Component.translatable("voxy.config.compat.esLodAutoReload"),
+                                        ()->CFG.eclipticSeasonsLodAutoReload, v->CFG.eclipticSeasonsLodAutoReload=v),
+                                new BoolOption(
+                                        "voxy:es_reload_on_season_change",
+                                        Component.translatable("voxy.config.compat.esReloadOnSeasonChange"),
+                                        ()->CFG.eclipticSeasonsReloadOnSeasonChange, v->CFG.eclipticSeasonsReloadOnSeasonChange=v)
+                        )
+                ).setEnabler("voxy:enabled"));
+
+    }
+
+
+    //0 = follow the LOD radius; otherwise a chunk count. Shared by the three Create distance sliders.
+    private static Component formatCreateDistance(int chunks) {
+        return chunks == 0
+                ? Component.translatable("voxy.config.compat.distanceFollowLod")
+                : Component.translatable("voxy.config.compat.distanceChunks", chunks);
+    }
+
+    private static final int SUBDIV_IN_MAX = 100;
+    private static final double SUBDIV_MIN = 28;
+    private static final double SUBDIV_MAX = 256;
+    private static final double SUBDIV_CONST = Math.log(SUBDIV_MAX/SUBDIV_MIN)/Math.log(2);
+
+    //In range is 0->200
+    //Out range is 28->256
+    private static float ln2subDiv(int in) {
+        return (float) (SUBDIV_MIN*Math.pow(2, SUBDIV_CONST*((double)in/SUBDIV_IN_MAX)));
+    }
+
+    //In range is ... any?
+    //Out range is 0->200
+    private static int subDiv2ln(float in) {
+        return (int) (((Math.log(((double)in)/SUBDIV_MIN)/Math.log(2))/SUBDIV_CONST)*SUBDIV_IN_MAX);
+    }
+}

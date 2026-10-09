@@ -1,0 +1,146 @@
+package me.cortex.voxy.client.mixin;
+
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.fml.loading.FMLLoader;
+import net.neoforged.fml.loading.LoadingModList;
+import org.objectweb.asm.tree.ClassNode;
+import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
+import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
+    private static boolean valkyrienSkiesInstalled;
+    private static boolean nvidiumInstalled;
+    private static boolean connectorInstalled = false;
+    private static boolean sableInstalled;
+    private static boolean eclipticSeasonsInstalled;
+    private static boolean createInstalled;
+
+    private static boolean isLoadedEarly(String modId) {
+        var list = LoadingModList.get();
+        return list != null && list.getModFileById(modId) != null;
+    }
+
+    @Override
+    public void onLoad(String mixinPackage) {
+        valkyrienSkiesInstalled = isLoadedEarly("valkyrienskies");
+        nvidiumInstalled = isLoadedEarly("nvidium");
+        connectorInstalled = isLoadedEarly("connector");
+        sableInstalled = isLoadedEarly("sable");
+        //Version-floored, not presence: the ClientLevel poll drives the stored-snow refresher,
+        //whose store writes only render once the mesh view is armed - same gate as the view itself
+        eclipticSeasonsInstalled =
+                me.cortex.voxy.client.core.compat.eclipticseasons.EsCompatGate.shouldArm();
+        createInstalled = isLoadedEarly("create");
+
+        //Second line of defence behind the mods.toml incompatible declaration: if load ordering
+        //ever lets that mod's mixins prepare before FML's dependency check fires, the crash report
+        //blames voxy internals ("@Mixin target was not found: ...GeometryCache") with no hint of
+        //the real culprit - this log line is the hint. The LoadingModList probe is safe this
+        //early on either dist.
+        if (isLoadedEarly("eclipticseasons_voxycompact")) {
+            org.slf4j.LoggerFactory.getLogger("voxy").error(
+                    "eclipticseasons_voxycompact detected: it targets the OFFICIAL voxy's internal"
+                    + " classes, several of which do not exist in this fork, and its mixins are"
+                    + " required - the game WILL crash during mixin bootstrap. Seasonal LOD support"
+                    + " is built into this fork; remove eclipticseasons_voxycompact.");
+        }
+    }
+
+    @Override
+    public boolean shouldApplyMixin(String targetClassName, String mixinClassName) { return true; }
+
+    @Override public List<String> getMixins() {
+        List<String> mixins = new ArrayList<>();
+        // client.voxy.mixins.json is entirely client-rendering (sodium/iris/sable/eclipticseasons targets).
+        // None of it applies on a dedicated server and the targets don't exist there, so add nothing server-side.
+        if (FMLLoader.getDist() != Dist.CLIENT) {
+            return mixins;
+        }
+        //(sable.MixinSableSubLevelRenderSectionManager omitted: its sable target class was removed in
+        // sable 2.0.3 and its sodium ctor target no longer matches sodium 0.8.12.)
+        if (sableInstalled) {
+            mixins.add("minecraft.MixinGameRendererSableRenderDistance");
+            mixins.add("sable.MixinSableReacharoundCulling");
+            mixins.add("sable.MixinSableDepthShim");
+        }
+        if (valkyrienSkiesInstalled && !nvidiumInstalled) {
+            mixins.add("sodium.MixinSodiumWorldRendererVS");
+        } else {
+            mixins.add("sodium.MixinDefaultChunkRenderer");
+        }
+
+        //Distance-cull Create's distant track rendering so it hands over to the LOD copy instead of
+        //floating past the view distance (references Create + Flywheel classes). MixinTrackVisual is
+        //the real fix under Flywheel (default + iris/colorwheel); MixinTrackRenderer covers the
+        //vanilla-BER fallback path when the Flywheel backend is off.
+        if (createInstalled) {
+            mixins.add("create.MixinTrackRenderer");
+            mixins.add("create.MixinTrackVisual");
+            mixins.add("create.AccessorContraptionVisual");
+            mixins.add("create.AccessorAbstractEntityVisual");
+            mixins.add("create.MixinCarriageContraptionVisual");
+            mixins.add("create.MixinCarriageContraptionEntityRenderer");
+            mixins.add("create.MixinStationRenderer");
+            mixins.add("create.MixinContraptionEntityRenderer");
+            mixins.add("create.MixinContraptionVisual");
+            //Placed kinetic machine blocks: their Flywheel moving parts (rotating shafts/cogs/machine
+            //animations) have no distance limit and float over LOD past the render distance. These cull
+            //them there - KineticBlockEntityVisual takes the shaft/cog/belt/fan family via a base beginFrame,
+            //MachineVisuals the ones that override it, the Renderer the backend-off BER; the accessor
+            //feeds `pos`.
+            mixins.add("create.AccessorAbstractBlockEntityVisual");
+            mixins.add("create.AccessorAbstractVisualLevel");
+            mixins.add("create.MixinKineticBlockEntityVisual");
+            mixins.add("create.MixinKineticMachineVisuals");
+            mixins.add("create.MixinBnbKineticVisuals");
+            mixins.add("create.MixinAzimuthBehaviourVisual");
+            mixins.add("create.MixinVisualizationManagerImpl");
+            mixins.add("create.MixinSafeBlockEntityRenderer");
+            //Ship-borne contraptions: force open the plot-coordinate render gates that kill them
+            //(vanilla dispatcher distance/frustum + EntityCulling, update-rate banding)
+            mixins.add("create.MixinEntityRenderDispatcherShip");
+            mixins.add("create.MixinBandedPrimeLimiter");
+            mixins.add("create.AccessorControlledContraptionEntity");
+            //Disassembly is the one removal with an explicit signal: kill the frozen snapshot at once
+            //instead of letting the 2s presence grace show a ghost where the blocks just landed
+            mixins.add("create.MixinContraptionDisassembly");
+            //A kinetic BE leaving a loaded chunk (assembly, breakage) takes its frozen snapshot with
+            //it; the sweep stays as the fallback for chunks the client never had loaded
+            mixins.add("create.MixinLevelChunkKineticRemoval");
+            //Rail identity for gantry ghost supersession (no getter upstream)
+            mixins.add("create.AccessorGantryContraptionEntity");
+            //Per-entity visual presence: backend-on does not mean drawn once nowheel deletes visuals
+            mixins.add("create.AccessorFlywheelStorage");
+            //Captures freeze the animation clock so one drivetrain's segments, captured on different
+            //ticks, still share a single frozen instant
+            mixins.add("create.MixinAnimationTickHolder");
+        }
+
+        // EclipticSeasons seasonal LOD: the mesh-time view, id decode and bake hooks are direct
+        // code in Mapper/ModelFactory/SoftwareModelTextureBakery/RenderDataFactory, formed behind
+        // SeasonalLod.view. The only mixin here is the ClientLevel tick poll that drives the
+        // stored-snow refresher (config-gated, off by default). Client-gated because
+        // VoxyTool references EclipticSeasons client classes (ClientCon).
+        if (eclipticSeasonsInstalled && FMLLoader.getDist() == Dist.CLIENT) {
+            mixins.add("eclipticseasons.MixinClientLevel");
+        }
+
+        return mixins;
+    }
+
+    @Override
+    public String getRefMapperConfig() { return null; }
+
+    @Override
+    public void acceptTargets(Set<String> myTargets, Set<String> otherTargets) {}
+
+    @Override
+    public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
+
+    @Override
+    public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
+}

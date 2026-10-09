@@ -1,0 +1,68 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="All-Rights-Reserved"
+issueTrackerURL="https://github.com/NHblock714/voxy/issues"
+
+[[mods]]
+modId="voxy"
+version="${version}"
+displayName="Voxy超远视野"
+description="NeoForge Voxy fork (far-distance LOD rendering) with bundled mod integrations: Create (distant trains, tracks, contraptions, kinetic culling), sable contraption LOD, and EclipticSeasons seasonal snow"
+authors="Cortex"
+credits="Fork maintained by NHblock"
+logoFile="assets/voxy/icon.png"
+
+[[dependencies.voxy]]
+modId="neoforge"
+type="required"
+versionRange="[21.1,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.voxy]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1]"
+ordering="NONE"
+side="BOTH"
+
+# Architectural dependency, not an enhancement: the LOD draw is dispatched only from sodium's chunk
+# renderer hooks, chunk auto-ingest rides its RenderSectionManager, and the bakery uses its colour
+# pipeline. Declared required so absence fails on the load screen instead of an NCDFE at world join.
+[[dependencies.voxy]]
+modId="sodium"
+type="required"
+versionRange="[0.6.13,)"
+ordering="AFTER"
+side="CLIENT"
+
+
+[[dependencies.voxy]]
+modId="iris"
+type="optional"
+versionRange="[1.8.12,)"
+ordering="AFTER"
+side="CLIENT"
+
+# Seasonal LOD (EclipticSeasons snow/vegetation) is built into this fork. The external compat mod
+# targets official voxy 0.2.16-beta internals by hard class name - several of those classes do
+# not exist in this fork (GeometryCache among them) while its version gate accepts any voxy >= 0.2.14
+# with required mixins, so co-installing is a guaranteed mixin-bootstrap crash with an unreadable
+# error. Declaring it incompatible turns that into a readable load-screen message naming both mods.
+[[dependencies.voxy]]
+modId="eclipticseasons_voxycompact"
+type="incompatible"
+versionRange="[0,)"
+ordering="NONE"
+side="CLIENT"
+reason="This voxy fork has EclipticSeasons seasonal-LOD support built in. Ecliptic Seasons: Voxy Compact targets the official voxy's internal classes, which this fork no longer has - loading both crashes the game. Remove eclipticseasons_voxycompact. / 本 voxy 分支已内置节气季节 LOD 支持;外置兼容模组指向官方 voxy 的内部类,与本分支同装必定崩溃,请删除 eclipticseasons_voxycompact。"
+
+[[mixins]]
+config="client.voxy.mixins.json"
+
+[[mixins]]
+config="iris.voxy.mixins.json"
+
+[[mixins]]
+config="common.voxy.mixins.json"
+
