@@ -78,6 +78,7 @@
   "voxy.config.compat.esReloadOnSeasonChange.tooltip": "季节变化时重建 LOD 渲染器，让已加载的远景立即换色",
   "voxy.join.header": "[Voxy] %s v%s",
   "voxy.join.credits": "维护 %s · QQ 群 %s",
+  "voxy.join.patched": "补丁由 %s 制作",
   "voxy.join.repo": "仓库 %s",
   "voxy.join.copyGroup": "点击复制群号",
   "voxy.join.openRepo": "点击打开 GitHub 仓库",

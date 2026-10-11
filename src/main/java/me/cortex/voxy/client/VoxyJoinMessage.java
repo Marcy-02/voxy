@@ -17,8 +17,10 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 public final class VoxyJoinMessage {
     public static final VoxyJoinMessage INSTANCE = new VoxyJoinMessage();
 
-    private static final String REPO = "https://github.com/NHblock714/voxy";
+    private static final String REPO = "https://github.com/Marcy-02/voxy/tree/MarcyFix";
+    private static final String UPSTREAM_REPO = "https://github.com/NHblock714/voxy";
     private static final String MAINTAINER = "NHblock";
+    private static final String PATCHER = "Marcy_02";
     private static final String QQ_GROUP = "1098491849";
     private static final int DELAY_TICKS = 20;
 
@@ -46,6 +48,7 @@ public final class VoxyJoinMessage {
         if (player != null) {
             player.displayClientMessage(header(), false);
             player.displayClientMessage(credits(), false);
+            player.displayClientMessage(patched(), false);
             player.displayClientMessage(repo(), false);
         }
     }
@@ -63,8 +66,22 @@ public final class VoxyJoinMessage {
                 .withClickEvent(new ClickEvent(ClickEvent.Action.COPY_TO_CLIPBOARD, QQ_GROUP))
                 .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
                         Component.translatable("voxy.join.copyGroup"))));
-        return Component.translatable("voxy.join.credits",
-                        Component.literal(MAINTAINER).withStyle(ChatFormatting.WHITE), group)
+        var maintainer = Component.literal(MAINTAINER).withStyle(style -> style
+                .withColor(ChatFormatting.WHITE)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, UPSTREAM_REPO))
+                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
+                        Component.translatable("voxy.join.openRepo"))));
+        return Component.translatable("voxy.join.credits", maintainer, group)
+                .withStyle(ChatFormatting.GRAY);
+    }
+
+    private static Component patched() {
+        var patcher = Component.literal(PATCHER).withStyle(style -> style
+                .withColor(ChatFormatting.WHITE)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, REPO))
+                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
+                        Component.translatable("voxy.join.openRepo"))));
+        return Component.translatable("voxy.join.patched", patcher)
                 .withStyle(ChatFormatting.GRAY);
     }
 

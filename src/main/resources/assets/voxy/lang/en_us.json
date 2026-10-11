@@ -78,6 +78,7 @@
   "voxy.config.compat.esReloadOnSeasonChange.tooltip": "Rebuild the LOD renderer when the season changes so already-loaded LODs recolor immediately",
   "voxy.join.header": "[Voxy] %s v%s",
   "voxy.join.credits": "Maintained by %s · QQ group %s",
+  "voxy.join.patched": "Patched by %s",
   "voxy.join.repo": "Repository %s",
   "voxy.join.copyGroup": "Click to copy the group number",
   "voxy.join.openRepo": "Click to open the GitHub repository",
