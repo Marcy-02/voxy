@@ -17,6 +17,9 @@ bin/
 # compile-only third-party jars, drop them in yourself (see README)
 /libs/
 
+*.class
+/scratch/
+
 # local workspace notes
 /ARCHITECTURE.md
 /HANDOFF.md

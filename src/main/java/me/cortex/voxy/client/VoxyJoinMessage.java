@@ -17,7 +17,7 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 public final class VoxyJoinMessage {
     public static final VoxyJoinMessage INSTANCE = new VoxyJoinMessage();
 
-    private static final String REPO = "https://github.com/Marcy-02/voxy/tree/MarcyFix";
+    private static final String REPO = "https://github.com/Marcy-02/voxy";
     private static final String UPSTREAM_REPO = "https://github.com/NHblock714/voxy";
     private static final String MAINTAINER = "NHblock";
     private static final String PATCHER = "Marcy_02";
